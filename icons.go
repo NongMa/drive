@@ -34,6 +34,7 @@ var (
 	iconFolderOpen   = lucide(`<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>`)
 	iconChevronLeft  = lucide(`<path d="m15 18-6-6 6-6"/>`)
 	iconX            = lucide(`<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`)
+	iconCopy         = lucide(`<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>`)
 	iconMore         = lucide(`<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>`)
 	iconSearch       = lucide(`<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>`)
 	iconEye          = lucide(`<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>`)
@@ -49,6 +50,7 @@ var (
 	iconSettings     = lucide(`<path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/>`)
 	iconChevronRight = lucide(`<path d="m9 18 6-6-6-6"/>`)
 	iconChevronDown  = lucide(`<path d="m6 9 6 6 6-6"/>`)
+	iconCheck        = lucide(`<path d="M20 6 9 17l-5-5"/>`)
 )
 
 type fileKindInfo struct {

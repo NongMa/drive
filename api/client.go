@@ -58,6 +58,24 @@ func decode(res *http.Response, out any) error {
 	return nil
 }
 
+func (c *Client) patchJSON(path string, payload any, out any) (int, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequest(http.MethodPatch, c.endpoint(path), bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.hc.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Body.Close()
+	return res.StatusCode, decode(res, out)
+}
+
 func (c *Client) getJSON(path string, out any) (int, error) {
 	res, err := c.hc.Get(c.endpoint(path))
 	if err != nil {
@@ -405,6 +423,20 @@ func (c *Client) CreateFile(name, key string, size int64, mimeType, folderID str
 	}
 	if status >= 400 {
 		return fmt.Errorf("create file status %d", status)
+	}
+	return nil
+}
+
+// MoveFile moves a file to a folder; empty folderID means the root.
+func (c *Client) MoveFile(id, folderID string) error {
+	status, err := c.patchJSON("/api/files", map[string]any{
+		"id": id, "folderId": folderID,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if status >= 400 {
+		return fmt.Errorf("move status %d", status)
 	}
 	return nil
 }

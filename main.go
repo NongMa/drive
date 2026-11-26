@@ -54,6 +54,7 @@ type app struct {
 	foldersLoading  bool
 	expanded        map[string]bool
 	folderGrid      ui.GridState
+	gridSelected    ui.Selection[string]
 	downloads       map[string]*downloadTask
 	downloadQueue   []*downloadTask
 	activeDownloads int
@@ -89,6 +90,11 @@ type app struct {
 	createFolderOpen bool
 	folderNameDraft  string
 	shareURL         string
+
+	updateChecking bool
+	updateState    string
+	updateErr      string
+	updateInfo     *releaseUpdate
 }
 
 type appSettings struct {
@@ -358,6 +364,24 @@ func (a *app) downloadIndicator(c *ui.Context, id string) {
 	}
 }
 
+// checkBox returns the clickable box itself (a Box reliably receives clicks;
+// a bare Row does not), so callers place the label beside it.
+func checkBox(c *ui.Context, checked bool) ui.Element {
+	t := c.Theme()
+	box := ui.Box(c).Width(18).Height(18).Radius(5).
+		Background(t.Surface.Alpha(0.85)).Border(1, t.TextMuted.Alpha(0.8)).
+		AlignItems(ui.Center).Justify(ui.Center)
+	if checked {
+		box.Background(t.Accent).Border(1, t.Accent)
+	}
+	box.Children(func() {
+		if checked {
+			ui.Icon(c, iconCheck).FontSize(11).TextColor(t.AccentText)
+		}
+	})
+	return box
+}
+
 func iconOnlyButtonBare(c *ui.Context, icon *ui.SVG, size float32) ui.Element {
 	e := ui.Row(c).Width(size).Height(size).AlignItems(ui.Center).Justify(ui.Center).Radius(size / 2)
 	e.Children(func() {
@@ -383,21 +407,21 @@ func (a *app) gridMetrics() (float32, float32) {
 		available = 420
 	}
 	// Aim for compact Finder-like icons: more columns and rows per screen.
-	columns := int(available / 175)
-	if columns < 3 {
-		columns = 3
+	columns := int(available / 150)
+	if columns < 4 {
+		columns = 4
 	}
-	if columns > 9 {
-		columns = 9
+	if columns > 10 {
+		columns = 10
 	}
-	minWidth := available/float32(columns) - 12
-	if minWidth < 128 {
-		minWidth = 128
+	minWidth := available/float32(columns) - 10
+	if minWidth < 110 {
+		minWidth = 110
 	}
-	if minWidth > 190 {
-		minWidth = 190
+	if minWidth > 170 {
+		minWidth = 170
 	}
-	height := minWidth*0.82 + 14
+	height := minWidth*0.8 + 12
 	return minWidth, height
 }
 
@@ -555,6 +579,42 @@ func (a *app) settingsDialog(c *ui.Context) {
 			ui.Text(c, "文件会下载到该目录；同名文件自动加序号，不会覆盖。超过任务数的下载会排队。").
 				FontSize(11).TextColor(t.TextMuted)
 
+			divider(c)
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).Gap(3).Grow(1).Children(func() {
+					ui.Text(c, "检查更新").FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, "当前版本 v"+currentVersion()).
+						FontSize(11).TextColor(t.TextMuted)
+				})
+				if iconButton(c, iconRefresh, "检查更新", 32, false).Clicked() {
+					a.checkUpdate()
+				}
+			})
+			if a.updateChecking {
+				ui.Text(c, "正在检查…").FontSize(11).TextColor(t.TextMuted)
+			}
+			if a.updateErr != "" {
+				ui.Text(c, a.updateErr).FontSize(11).TextColor(ui.Hex("#ff9095"))
+			} else if a.updateState != "" {
+				ui.Text(c, a.updateState).FontSize(11).TextColor(t.Accent)
+			}
+			if a.updateInfo != nil {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(8, 10).Radius(10).
+					Material(glass.Glass{}).Children(func() {
+					ui.Column(c).Gap(2).Grow(1).Children(func() {
+						ui.Text(c, "v"+a.updateInfo.Version+" · "+a.updateInfo.Date).FontSize(11)
+						if a.updateInfo.Name != "" {
+							ui.Text(c, a.updateInfo.Name).FontSize(11).TextColor(t.TextMuted)
+						}
+					})
+					if ui.Button(c, "前往更新").Height(32).Radius(9).
+						Material(glass.Glass{Tint: t.Accent, Interactive: true}).
+						TextColor(t.AccentText).Clicked() {
+						openExternal(a.updateInfo.URL)
+					}
+				})
+			}
+
 			ui.Row(c).Gap(10).Justify(ui.End).Children(func() {
 				if ghost(c, "取消", 34).Clicked() {
 					a.settingsOpen = false
@@ -687,7 +747,7 @@ func (a *app) loginContent(c *ui.Context) {
 func (a *app) filesContent(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Grow(1).Padding(10, 16, 16, 12).Gap(14).Children(func() {
-		// Sidebar: brand, navigation, folder creation, account at the bottom.
+		// Sidebar: brand, navigation and account.
 		softPanel(c).Width(224).FillHeight().Padding(18, 14).Gap(7).Children(func() {
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(0, 4, 10).Children(func() {
 				brandMark(c, 34)
@@ -731,10 +791,8 @@ func (a *app) filesContent(c *ui.Context) {
 			}
 		})
 
-		// Main column: toolbar card + file card. FillHeight is essential here:
-		// a Row centers its children vertically, so without it the whole
-		// content block drops into the middle of the window.
 		ui.Column(c).Grow(1).FillHeight().Gap(14).Children(func() {
+			// Toast.
 			if a.notice != "" {
 				ttl := 6 * time.Second
 				if a.noticeKind == "success" {
@@ -743,7 +801,6 @@ func (a *app) filesContent(c *ui.Context) {
 				if time.Since(a.noticeAt) > ttl {
 					a.notice, a.noticeKind = "", ""
 				} else {
-					// Keep asking for frames so the toast can expire on time.
 					c.After(300 * time.Millisecond)
 					tint := ui.Transparent
 					textColor := t.Accent
@@ -762,6 +819,8 @@ func (a *app) filesContent(c *ui.Context) {
 					})
 				}
 			}
+
+			// Toolbar.
 			bar := panel(c)
 			bar.Padding(14, 18).Children(func() {
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
@@ -784,8 +843,6 @@ func (a *app) filesContent(c *ui.Context) {
 						FontSize(11).TextColor(t.TextMuted)
 				})
 				ui.Box(c).Height(8)
-				// The tool cluster is one Liquid Glass surface, as macOS draws
-				// a toolbar: panes fuse while they nearly touch.
 				modeIcon := iconGrid
 				if a.viewMode == "grid" {
 					modeIcon = iconList
@@ -823,12 +880,6 @@ func (a *app) filesContent(c *ui.Context) {
 							a.viewMode = "grid"
 						}
 					}
-					if tools.Pane(iconOnlyButtonBare(c, iconSort, 34)).Clicked() {
-						a.sortAsc = !a.sortAsc
-						a.reload()
-					}
-
-					// The primary action is the last pane of the same group.
 					uploadPane := ui.Row(c).Height(34).Padding(0, 11).Gap(7).
 						AlignItems(ui.Center).Justify(ui.Center).Radius(9).Background(t.Accent)
 					uploadPane.Children(func() {
@@ -836,50 +887,86 @@ func (a *app) filesContent(c *ui.Context) {
 						ui.Text(c, "上传文件").FontSize(12).TextColor(t.AccentText)
 					})
 					if uploadPane.Clicked() {
-						a.menuOpen, a.menuID = true, "upload"
+						if a.menuID == "upload" {
+							a.menuOpen = !a.menuOpen
+						} else {
+							a.menuOpen, a.menuID = true, "upload"
+						}
 					}
 					tools.Pane(uploadPane)
 					a.glassPopover(c, uploadPane, "upload", a.uploadMenuItems())
 				})
 			})
 
+			// File area.
 			listCard := panel(c)
 			listCard.Grow(1).Padding(16, 18).Children(func() {
 				ui.Column(c).Gap(10).Children(func() {
+					// Folder header + compact folder row.
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Text(c, "文件夹").FontSize(12).TextColor(t.TextMuted).Grow(1)
 						if iconOnlyButton(c, iconPlus, 26).Clicked() {
 							a.folderNameDraft, a.createFolderOpen = "", true
 						}
 					})
-					if len(a.folders) > 0 && a.viewMode == "grid" {
-						a.folderGrid.Key = func(i int) any { return a.folders[i].ID }
-						ui.GridView(c, &a.folderGrid, len(a.folders), 150, 88, func(i int) {
-							folder := a.folders[i]
-							card := ui.Box(c).Key(folder.ID).Padding(10).Gap(4).
-								Radius(12).Material(glass.Glass{})
-							card.Children(func() {
-								ui.Icon(c, iconFolderOpen).FontSize(20).TextColor(t.Accent)
-								ui.Text(c, folder.Name).FontSize(12).MaxLines(1).Ellipsis("…")
-								ui.Text(c, fmt.Sprintf("%d 个文件", folder.FileCount)).
-									FontSize(10).TextColor(t.TextMuted)
-							})
-							if card.Clicked() {
-								a.openFolder(folder)
+					if len(a.folders) > 0 {
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							for _, folder := range a.folders {
+								f := folder
+								if iconButton(c, iconFolderOpen, f.Name, 28, false).Clicked() {
+									a.openFolder(f)
+								}
 							}
-						}).MaxHeight(106).Gap(10)
-						divider(c)
-					}
-					if a.viewMode == "grid" {
-						ui.Row(c).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "文件").FontSize(12).TextColor(t.TextMuted)
 						})
 					}
+
+					// Single row: select-all, file label, count, then bulk actions.
+					var moveBtn ui.Element
+					ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 0, 8).Children(func() {
+						allSelected := len(a.files) > 0 && a.gridSelected.Len() >= len(a.files)
+						boxClicked := checkBox(c, allSelected).Label("全选").Clicked()
+						labelClicked := ui.Text(c, "全选").FontSize(11).TextColor(t.TextMuted).Clicked()
+						if boxClicked || labelClicked {
+							if allSelected {
+								a.gridSelected.Clear()
+							} else {
+								for _, f := range a.files {
+									a.gridSelected.Add(f.ID)
+								}
+							}
+						}
+						ui.Text(c, "文件").FontSize(12).TextColor(t.TextMuted)
+						if a.gridSelected.Len() > 0 {
+							ui.Text(c, fmt.Sprintf("已选 %d 项", a.gridSelected.Len())).
+								FontSize(11).TextColor(t.Accent)
+						}
+						ui.Box(c).Grow(1)
+						if a.gridSelected.Len() > 0 {
+							if iconButton(c, iconDownload, "下载", 32, false).Clicked() {
+								a.downloadSelected()
+							}
+							if iconButton(c, iconTrash, "删除", 32, false).Clicked() {
+								a.deleteSelected()
+							}
+							moveBtn = iconButton(c, iconFolderOpen, "移动到...", 32, false)
+							if moveBtn.Clicked() {
+								if a.menuID == "move" {
+									a.menuOpen = !a.menuOpen
+								} else {
+									a.menuOpen, a.menuID = true, "move"
+								}
+							}
+						}
+					})
+					if moveBtn.Valid() && a.gridSelected.Len() > 0 {
+						a.glassPopover(c, moveBtn, "move", a.moveMenuItems())
+					}
+
 					if a.loadError != "" {
-						ui.Text(c, a.loadError).FontSize(12).TextColor(ui.Hex("#ff6369"))
+						ui.Text(c, a.loadError).FontSize(12).TextColor(ui.Hex("#ff9095"))
 					}
 					if a.loading {
-						ui.Column(c).Fill().Center().Gap(8).Children(func() {
+						ui.Row(c).Fill().Center().Gap(8).Children(func() {
 							ui.Spinner(c)
 							ui.Text(c, "加载中…").FontSize(12).TextColor(t.TextMuted)
 						})
@@ -887,6 +974,7 @@ func (a *app) filesContent(c *ui.Context) {
 						if a.viewMode == "grid" {
 							a.grid.Key = func(i int) any { return a.files[i].ID }
 							a.grid.Label = func(i int) string { return a.files[i].Name }
+							a.grid.Selection = &a.gridSelected
 							minWidth, cardHeight := a.gridMetrics()
 							previewHeight := cardHeight - 64
 							if previewHeight < 52 {
@@ -896,11 +984,11 @@ func (a *app) filesContent(c *ui.Context) {
 								f := a.files[i]
 								kind := fileKind(f.Name, f.MimeType)
 								card := ui.Box(c).Key(f.ID).Grow(1).Padding(12).Gap(8).
-									Radius(14).Material(glass.Glass{}).Perspective(700)
-								// 3D tilt: the side under the pointer is pressed
-								// inward; angles ease back to zero on leave.
+									Radius(14).Material(glass.Glass{}).Perspective(700).
+									Tooltip(fmt.Sprintf("名称：%s\n修改时间：%s", f.Name, relativeTime(f.CreatedAt)))
 								tiltX, tiltY, lift := float32(0), float32(0), float32(0)
-								if card.Hovered() {
+								hovered := card.Hovered()
+								if hovered {
 									card.Border(1, t.Accent.Alpha(0.45))
 									if x, y, inside := card.PointerPosition(); inside {
 										nx := (x - minWidth/2) / (minWidth / 2)
@@ -925,19 +1013,42 @@ func (a *app) filesContent(c *ui.Context) {
 									ui.Box(c).FillWidth().Height(previewHeight).Radius(10).
 										Background(kind.Color.Alpha(0.12)).
 										AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-										ui.Icon(c, kind.Icon).FontSize(34).TextColor(kind.Color)
-									})
-									ui.Column(c).Gap(3).Children(func() {
-										ui.Text(c, f.Name).FontSize(13).MaxLines(1).Ellipsis("…")
-										ui.Text(c, fmt.Sprintf("%s  ·  %s  ·  %s", humanSize(f.Size), kind.Label, uploadTime(f.CreatedAt))).
-											FontSize(10).TextColor(t.TextMuted).MaxLines(1)
-									})
-									if a.downloads[f.ID] != nil {
-										ui.Row(c).Absolute().Bottom(58).Right(24).Padding(6, 8).Gap(6).
-											AlignItems(ui.Center).Radius(10).Material(glass.Glass{}).
-											Children(func() {
+										if a.downloads[f.ID] != nil {
+											ui.Column(c).AlignItems(ui.Center).Justify(ui.Center).Gap(4).Children(func() {
+												ui.Icon(c, kind.Icon).FontSize(20).TextColor(kind.Color.Alpha(0.7))
 												a.downloadIndicator(c, f.ID)
 											})
+										} else {
+											ui.Icon(c, kind.Icon).FontSize(34).TextColor(kind.Color)
+										}
+									})
+									ui.Column(c).FillWidth().Gap(3).Children(func() {
+										ui.Text(c, f.Name).FontSize(12).Width(minWidth - 24).
+											MaxLines(2).Ellipsis("…")
+									})
+									selected := a.gridSelected.Has(f.ID)
+									if hovered || selected {
+										ui.Row(c).Absolute().Top(8).Left(8).
+											AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+											box := ui.Box(c).Width(18).Height(18).Radius(5).
+												Background(t.Surface.Alpha(0.85)).Border(1, t.TextMuted.Alpha(0.8)).
+												AlignItems(ui.Center).Justify(ui.Center)
+											if selected {
+												box.Background(t.Accent).Border(1, t.Accent)
+											}
+											box.Children(func() {
+												if selected {
+													ui.Icon(c, iconCheck).FontSize(11).TextColor(t.AccentText)
+												}
+											})
+											if box.Clicked() {
+												if selected {
+													a.gridSelected.Remove(f.ID)
+												} else {
+													a.gridSelected.Add(f.ID)
+												}
+											}
+										})
 									}
 									var more ui.Element
 									ui.Row(c).Absolute().Top(14).Right(16).Children(func() {
@@ -950,51 +1061,41 @@ func (a *app) filesContent(c *ui.Context) {
 								})
 							}).Grow(1)
 						} else {
-							// Finder/网盘 style: folders and files in one table.
-							ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(0, 6).Children(func() {
+							// Unified table: folders first, then files.
+							ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+								ui.Box(c).Width(18)
 								ui.Text(c, "文件名").FontSize(11).TextColor(t.TextMuted).Grow(1)
 								ui.Text(c, "大小").FontSize(11).TextColor(t.TextMuted).Width(90).TextAlign(ui.End)
 								ui.Box(c).Width(16)
 								ui.Text(c, "文件类型").FontSize(11).TextColor(t.TextMuted).Width(90)
 								ui.Text(c, "修改时间").FontSize(11).TextColor(t.TextMuted).Width(130)
+								ui.Box(c).Width(80)
 								ui.Box(c).Width(32)
 							})
 							divider(c)
-							total := len(a.folders) + len(a.files)
+							total := len(a.files)
 							a.list.Key = func(i int) any {
-								if i < len(a.folders) {
-									return "dir-" + a.folders[i].ID
-								}
-								return a.files[i-len(a.folders)].ID
+								return a.files[i].ID
 							}
 							ui.List(c, &a.list, total, func(i int) {
-								if i < len(a.folders) {
-									folder := a.folders[i]
-									ui.Row(c).Key("dir-"+folder.ID).Height(46).Padding(0, 6).Gap(10).
-										AlignItems(ui.Center).Children(func() {
-										ui.Row(c).Gap(10).AlignItems(ui.Center).Grow(1).Children(func() {
-											ui.Box(c).Width(32).Height(32).Radius(8).
-												Background(t.Accent.Alpha(0.12)).
-												AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-												ui.Icon(c, iconFolderOpen).FontSize(17).TextColor(t.Accent)
-											})
-											if ui.Text(c, folder.Name).FontSize(13).Grow(1).MaxLines(1).Ellipsis("…").Clicked() {
-												a.openFolder(folder)
+								f := a.files[i]
+								kind := fileKind(f.Name, f.MimeType)
+								row := ui.Row(c).Key(f.ID).Height(46).Gap(10).AlignItems(ui.Center)
+								hovered := row.Hovered()
+								row.Children(func() {
+									ui.Row(c).Gap(10).AlignItems(ui.Center).Grow(1).Children(func() {
+										selected := a.gridSelected.Has(f.ID)
+										ui.Box(c).Width(18).AlignItems(ui.Center).Children(func() {
+											if hovered || selected {
+												if checkBox(c, selected).Label("选中 " + f.Name).Clicked() {
+													if selected {
+														a.gridSelected.Remove(f.ID)
+													} else {
+														a.gridSelected.Add(f.ID)
+													}
+												}
 											}
 										})
-										ui.Text(c, "-").FontSize(11).TextColor(t.TextMuted).Width(90).TextAlign(ui.End)
-										ui.Box(c).Width(16)
-										ui.Text(c, "文件夹").FontSize(11).TextColor(t.TextMuted).Width(90)
-										ui.Text(c, uploadTime(folder.CreatedAt)).FontSize(11).
-											TextColor(t.TextMuted).Width(130)
-										ui.Box(c).Width(32)
-									})
-									return
-								}
-								f := a.files[i-len(a.folders)]
-								ui.Row(c).Key(f.ID).Height(46).Padding(0, 6).Gap(10).AlignItems(ui.Center).Children(func() {
-									kind := fileKind(f.Name, f.MimeType)
-									ui.Row(c).Gap(10).AlignItems(ui.Center).Grow(1).Children(func() {
 										ui.Box(c).Width(32).Height(32).Radius(8).
 											Background(kind.Color.Alpha(0.14)).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 											ui.Icon(c, kind.Icon).FontSize(17).TextColor(kind.Color)
@@ -1007,8 +1108,13 @@ func (a *app) filesContent(c *ui.Context) {
 									ui.Box(c).Width(16)
 									ui.Text(c, kind.Label).FontSize(11).TextColor(t.TextMuted).Width(90)
 									ui.Text(c, uploadTime(f.CreatedAt)).FontSize(11).TextColor(t.TextMuted).Width(130)
-									// One menu keeps the row compact, as in Finder.
-									a.downloadIndicator(c, f.ID)
+									// Fixed-width slot keeps every column (and the
+									// more button) stable as download status changes.
+									ui.Box(c).Width(80).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+										if a.downloads[f.ID] != nil {
+											a.downloadIndicator(c, f.ID)
+										}
+									})
 									more := iconOnlyButton(c, iconMore, 32)
 									if more.Clicked() {
 										a.menuOpen, a.menuID = true, f.ID
@@ -1020,12 +1126,24 @@ func (a *app) filesContent(c *ui.Context) {
 					} else {
 						ui.Column(c).Fill().Center().Gap(6).Children(func() {
 							ui.Icon(c, iconFolderOpen).FontSize(34).TextColor(t.TextMuted)
-							ui.Text(c, "这里还没有文件").FontSize(14)
+							ui.Text(c, "这里还没有内容").FontSize(14)
 							ui.Text(c, "上传文件或新建文件夹开始使用").FontSize(12).TextColor(t.TextMuted)
 						})
 					}
 					if a.shareURL != "" {
-						ui.Text(c, "分享链接: "+a.shareURL).FontSize(12).TextColor(t.Accent)
+						ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(8, 12).Radius(10).
+							Material(glass.Glass{}).Children(func() {
+							ui.Text(c, "分享链接").FontSize(11).TextColor(t.TextMuted)
+							ui.Text(c, a.shareURL).FontSize(12).TextColor(t.Accent).
+								Grow(1).MaxLines(1).Ellipsis("…")
+							if iconButton(c, iconCopy, "复制", 26, false).Clicked() {
+								c.WriteClipboard(a.shareURL)
+								a.setSuccess("链接已复制")
+							}
+							if iconButton(c, iconX, "关闭", 26, false).Clicked() {
+								a.shareURL = ""
+							}
+						})
 					}
 				}).Grow(1)
 			})
@@ -1135,6 +1253,28 @@ func (a *app) uploadDrawer(c *ui.Context) {
 	})
 }
 
+// relativeTime shows 今天/昨天 for recent files, like Explorer/网盘 tooltips.
+func relativeTime(raw string) string {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	now := time.Now()
+	hourMin := t.Format("15:04")
+	sameDay := func(a, b time.Time) bool {
+		ay, am, ad := a.Date()
+		by, bm, bd := b.Date()
+		return ay == by && am == bm && ad == bd
+	}
+	if sameDay(t, now) {
+		return "今天 " + hourMin
+	}
+	if sameDay(t, now.AddDate(0, 0, -1)) {
+		return "昨天 " + hourMin
+	}
+	return t.Local().Format("2006-01-02")
+}
+
 func uploadTime(raw string) string {
 	if raw == "" {
 		return ""
@@ -1219,6 +1359,7 @@ func (a *app) reload() {
 	folder, query := a.current, a.query
 	a.loading = true
 	a.loadError = ""
+	a.gridSelected.Clear()
 	a.async(func() {
 		files, ferr := a.api.Files(folder, query, 1, 100, a.sortAsc)
 		folders, derr := a.api.Folders(folder)
@@ -1480,6 +1621,90 @@ func (a *app) startDownload(task *downloadTask) {
 			a.pumpDownloads()
 		})
 	})
+}
+
+func (a *app) selectedFiles() []api.File {
+	var files []api.File
+	for _, f := range a.files {
+		if a.gridSelected.Has(f.ID) {
+			files = append(files, f)
+		}
+	}
+	return files
+}
+
+func (a *app) downloadSelected() {
+	files := a.selectedFiles()
+	if len(files) == 0 {
+		return
+	}
+	for _, f := range files {
+		a.downloadFile(f)
+	}
+	a.setInfo(fmt.Sprintf("已开始下载 %d 个文件", len(files)))
+}
+
+func (a *app) deleteSelected() {
+	files := a.selectedFiles()
+	if len(files) == 0 {
+		return
+	}
+	a.async(func() {
+		failed := 0
+		for _, f := range files {
+			if err := a.api.DeleteFile(f.ID); err != nil {
+				failed++
+			}
+		}
+		a.win.Update(func() {
+			a.gridSelected.Clear()
+			a.reload()
+			if failed > 0 {
+				a.setError(fmt.Sprintf("已删除 %d 个，失败 %d 个", len(files)-failed, failed))
+			} else {
+				a.setSuccess(fmt.Sprintf("已删除 %d 个文件", len(files)))
+			}
+		})
+	})
+}
+
+func (a *app) moveSelected(folderID string) {
+	files := a.selectedFiles()
+	if len(files) == 0 {
+		return
+	}
+	a.async(func() {
+		failed := 0
+		for _, f := range files {
+			if err := a.api.MoveFile(f.ID, folderID); err != nil {
+				failed++
+			}
+		}
+		a.win.Update(func() {
+			a.gridSelected.Clear()
+			a.reload()
+			if failed > 0 {
+				a.setError(fmt.Sprintf("已移动 %d 个，失败 %d 个", len(files)-failed, failed))
+			} else {
+				a.setSuccess(fmt.Sprintf("已移动 %d 个文件", len(files)))
+			}
+		})
+	})
+}
+
+func (a *app) moveMenuItems() []menuEntry {
+	items := []menuEntry{{Label: "根目录", Run: func() { a.moveSelected("") }}}
+	for _, folder := range a.allFolders {
+		target := folder
+		if target.ID == a.current {
+			continue
+		}
+		items = append(items, menuEntry{
+			Label: target.Name,
+			Run:   func() { a.moveSelected(target.ID) },
+		})
+	}
+	return items
 }
 
 func (a *app) logout() {
