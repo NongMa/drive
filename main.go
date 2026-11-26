@@ -382,18 +382,22 @@ func (a *app) gridMetrics() (float32, float32) {
 	if available < 420 {
 		available = 420
 	}
-	columns := int(available / 240)
-	if columns < 2 {
-		columns = 2
+	// Aim for compact Finder-like icons: more columns and rows per screen.
+	columns := int(available / 175)
+	if columns < 3 {
+		columns = 3
 	}
-	if columns > 7 {
-		columns = 7
+	if columns > 9 {
+		columns = 9
 	}
-	minWidth := available/float32(columns) - 14
-	if minWidth < 140 {
-		minWidth = 140
+	minWidth := available/float32(columns) - 12
+	if minWidth < 128 {
+		minWidth = 128
 	}
-	height := minWidth*0.9 + 20
+	if minWidth > 190 {
+		minWidth = 190
+	}
+	height := minWidth*0.82 + 14
 	return minWidth, height
 }
 
