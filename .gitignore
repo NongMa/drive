@@ -1,0 +1,9 @@
+/build/
+/.mygo/
+/.agents/
+mygo_windows_*.syso
+
+# 本地环境配置（含服务地址等），不要提交；示例文件除外
+.env
+.env.*
+!.env.example

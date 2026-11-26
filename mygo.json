@@ -1,0 +1,8 @@
+{
+  "name": "NongMa Drive",
+  "identifier": "com.nongma.drive",
+  "version": "0.1.0",
+  "out": "build",
+  "ios": { "minimumSystemVersion": "17.0" },
+  "android": { "minSdk": 26 }
+}
