@@ -14,7 +14,7 @@ import (
 
 // latestReleaseURL is the public GitHub API endpoint for the newest release of
 // this desktop app. It contains no deployment-specific information.
-const latestReleaseURL = "https://api.github.com/repos/NongMa/nongma-drive/releases/latest"
+const latestReleaseURL = "https://api.github.com/repos/NongMa/drive/releases/latest"
 
 // fallbackVersion matches the version in mygo.json; it is used when the
 // runtime has no embedded build version (for example in dev builds).

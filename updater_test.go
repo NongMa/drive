@@ -36,7 +36,7 @@ func TestSettingsUpdateUI(t *testing.T) {
 		settings:     appSettings{MaxDownloads: 1},
 		updateInfo: &releaseUpdate{
 			Version: "0.2.0",
-			URL:     "https://github.com/NongMa/nongma-drive/releases/tag/v0.2.0",
+			URL:     "https://github.com/NongMa/drive/releases/tag/v0.2.0",
 			Name:    "NongMa Drive 0.2.0",
 			Date:    "2026-11-26",
 		},
@@ -56,7 +56,7 @@ func TestUpdateFromRelease(t *testing.T) {
 	base := &githubRelease{
 		TagName:     "v0.2.0",
 		Name:        "NongMa Drive 0.2.0",
-		HTMLURL:     "https://github.com/NongMa/nongma-drive/releases/tag/v0.2.0",
+		HTMLURL:     "https://github.com/NongMa/drive/releases/tag/v0.2.0",
 		PublishedAt: "2026-11-26T12:00:00Z",
 	}
 	if got := updateFromRelease(base, "0.1.0"); got == nil {
