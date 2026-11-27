@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
+	"nongma-drive/api"
 )
 
 // latestReleaseURL is the public GitHub API endpoint for the newest release of
@@ -18,7 +22,7 @@ const latestReleaseURL = "https://api.github.com/repos/NongMa/drive/releases/lat
 
 // fallbackVersion matches the version in mygo.json; it is used when the
 // runtime has no embedded build version (for example in dev builds).
-const fallbackVersion = "0.2.1"
+const fallbackVersion = "0.2.2"
 
 func currentVersion() string {
 	if v := strings.TrimSpace(mygo.App.Version()); v != "" {
@@ -27,14 +31,27 @@ func currentVersion() string {
 	return fallbackVersion
 }
 
+type githubAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
+}
+
 type githubRelease struct {
-	TagName     string `json:"tag_name"`
-	Name        string `json:"name"`
-	Body        string `json:"body"`
-	HTMLURL     string `json:"html_url"`
-	PublishedAt string `json:"published_at"`
-	Draft       bool   `json:"draft"`
-	Prerelease  bool   `json:"prerelease"`
+	TagName     string        `json:"tag_name"`
+	Name        string        `json:"name"`
+	Body        string        `json:"body"`
+	HTMLURL     string        `json:"html_url"`
+	PublishedAt string        `json:"published_at"`
+	Draft       bool          `json:"draft"`
+	Prerelease  bool          `json:"prerelease"`
+	Assets      []githubAsset `json:"assets"`
+}
+
+type releaseAsset struct {
+	Name string
+	URL  string
+	Size int64
 }
 
 type releaseUpdate struct {
@@ -42,6 +59,7 @@ type releaseUpdate struct {
 	URL     string
 	Name    string
 	Date    string
+	Asset   *releaseAsset
 }
 
 // fetchLatestRelease returns the newest public release from GitHub.
@@ -99,6 +117,43 @@ func versionGreater(a, b string) bool {
 	return ap > bp
 }
 
+// pickUpdateAsset selects the installer for the running platform. Windows uses
+// the setup exe; macOS uses the dmg matching the CPU architecture.
+func pickUpdateAsset(rel *githubRelease) *releaseAsset {
+	if rel == nil {
+		return nil
+	}
+	var want string
+	switch runtime.GOOS {
+	case "windows":
+		want = "setup-"
+	case "darwin":
+		if runtime.GOARCH == "arm64" {
+			want = "-arm64.dmg"
+		} else {
+			want = "-amd64.dmg"
+		}
+	default:
+		return nil
+	}
+	var fallback *releaseAsset
+	for _, a := range rel.Assets {
+		if a.BrowserDownloadURL == "" {
+			continue
+		}
+		name := strings.ToLower(a.Name)
+		asset := &releaseAsset{Name: a.Name, URL: a.BrowserDownloadURL, Size: a.Size}
+		if strings.Contains(name, want) {
+			return asset
+		}
+		if runtime.GOOS == "windows" && strings.HasSuffix(name, ".exe") &&
+			!strings.Contains(name, "portable") && fallback == nil {
+			fallback = asset
+		}
+	}
+	return fallback
+}
+
 // updateFromRelease converts a GitHub release into an update only when it is a
 // public, stable release newer than the running app.
 func updateFromRelease(rel *githubRelease, current string) *releaseUpdate {
@@ -117,6 +172,7 @@ func updateFromRelease(rel *githubRelease, current string) *releaseUpdate {
 		URL:     rel.HTMLURL,
 		Name:    rel.Name,
 		Date:    date,
+		Asset:   pickUpdateAsset(rel),
 	}
 }
 
@@ -139,11 +195,65 @@ func (a *app) checkUpdate() {
 				return
 			}
 			a.updateInfo = found
+			a.updateDownload, a.updatePath = nil, ""
 			if found == nil {
 				a.updateState = "已是最新版本"
+			} else if found.Asset == nil {
+				a.updateState = "发现新版本 v" + found.Version + "，但没有当前平台的安装包"
 			} else {
 				a.updateState = "发现新版本 v" + found.Version
 			}
 		})
 	})
+}
+
+// downloadUpdate fetches the installer into the download directory and keeps
+// its progress in a dedicated task so the settings dialog can show it inline.
+func (a *app) downloadUpdate() {
+	if a.updateInfo == nil || a.updateInfo.Asset == nil {
+		return
+	}
+	if a.updateDownload != nil && a.updateDownload.Status == "downloading" {
+		return
+	}
+	asset := a.updateInfo.Asset
+	dir := strings.TrimSpace(a.settings.DownloadDir)
+	if dir == "" {
+		dir = a.defaultDownloadDir()
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		a.updateErr = "无法创建下载目录: " + err.Error()
+		return
+	}
+	dest := filepath.Join(dir, asset.Name)
+	_ = os.Remove(dest)
+	task := &downloadTask{ID: "__update__", Name: asset.Name, Status: "downloading"}
+	a.updateDownload = task
+	a.updateErr = ""
+	a.async(func() {
+		err := api.DownloadToFile(asset.URL, dest, func(done, total int64) {
+			pct := 0
+			if total > 0 {
+				pct = int(float64(done) * 100 / float64(total))
+			}
+			a.win.Update(func() { task.Percent = pct })
+		})
+		a.win.Update(func() {
+			if err != nil {
+				task.Status, task.Err = "error", err.Error()
+				a.updateErr = "更新下载失败: " + err.Error()
+				return
+			}
+			task.Status, task.Percent = "done", 100
+			a.updatePath = dest
+		})
+	})
+}
+
+// installUpdate opens the downloaded installer/dmg with the system handler.
+func (a *app) installUpdate() {
+	if a.updatePath == "" {
+		return
+	}
+	_ = mygo.Shell.OpenPath(a.updatePath)
 }

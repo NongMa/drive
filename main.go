@@ -95,6 +95,8 @@ type app struct {
 	updateState    string
 	updateErr      string
 	updateInfo     *releaseUpdate
+	updateDownload *downloadTask
+	updatePath     string
 }
 
 type appSettings struct {
@@ -606,11 +608,27 @@ func (a *app) settingsDialog(c *ui.Context) {
 						if a.updateInfo.Name != "" {
 							ui.Text(c, a.updateInfo.Name).FontSize(11).TextColor(t.TextMuted)
 						}
+						if a.updateDownload != nil && a.updateDownload.Status == "downloading" {
+							ui.Text(c, "下载中…").FontSize(10).TextColor(t.TextMuted)
+						}
 					})
-					if ui.Button(c, "前往更新").Height(32).Radius(9).
-						Material(glass.Glass{Tint: t.Accent, Interactive: true}).
-						TextColor(t.AccentText).Clicked() {
-						openExternal(a.updateInfo.URL)
+					switch {
+					case a.updateDownload != nil && a.updateDownload.Status == "downloading":
+						progressRing(c, 26, a.updateDownload.Percent)
+					case a.updateDownload != nil && a.updateDownload.Status == "done":
+						if ui.Button(c, "安装更新").Height(32).Radius(9).
+							Material(glass.Glass{Tint: t.Accent, Interactive: true}).
+							TextColor(t.AccentText).Clicked() {
+							a.installUpdate()
+						}
+					default:
+						if a.updateInfo.Asset == nil {
+							ui.Text(c, "无当前平台安装包").FontSize(11).TextColor(t.TextMuted)
+						} else if ui.Button(c, "下载更新").Height(32).Radius(9).
+							Material(glass.Glass{Tint: t.Accent, Interactive: true}).
+							TextColor(t.AccentText).Clicked() {
+							a.downloadUpdate()
+						}
 					}
 				})
 			}

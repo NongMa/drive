@@ -1,6 +1,8 @@
 package main
 
 import (
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -39,16 +41,50 @@ func TestSettingsUpdateUI(t *testing.T) {
 			URL:     "https://github.com/NongMa/drive/releases/tag/v0.2.0",
 			Name:    "NongMa Drive 0.2.0",
 			Date:    "2026-11-26",
+			Asset:   &releaseAsset{Name: "setup.exe", URL: "https://example.com/setup.exe"},
 		},
 		updateState: "发现新版本 v0.2.0",
 		downloads:   map[string]*downloadTask{},
 		expanded:    map[string]bool{},
 	}
 	tt := ui.NewTester(a.view, 1400, 900)
-	for _, label := range []string{"检查更新", "前往更新", "发现新版本 v0.2.0", "v0.2.0 · 2026-11-26", "当前版本 v" + fallbackVersion} {
+	for _, label := range []string{"检查更新", "下载更新", "发现新版本 v0.2.0", "v0.2.0 · 2026-11-26", "当前版本 v" + fallbackVersion} {
 		if _, ok := tt.Find(label); !ok {
 			t.Errorf("settings missing %q", label)
 		}
+	}
+}
+
+func TestPickUpdateAsset(t *testing.T) {
+	rel := &githubRelease{Assets: []githubAsset{
+		{Name: "nongma-drive-0.2.1-arm64.dmg", BrowserDownloadURL: "u-arm"},
+		{Name: "nongma-drive-0.2.1-amd64.dmg", BrowserDownloadURL: "u-amd"},
+		{Name: "nongma-drive-setup-0.2.1-amd64.exe", BrowserDownloadURL: "u-setup"},
+		{Name: "NongMa.Drive.exe", BrowserDownloadURL: "u-portable"},
+	}}
+	got := pickUpdateAsset(rel)
+	if got == nil {
+		t.Fatal("expected an asset for current platform")
+	}
+	switch runtime.GOOS {
+	case "windows":
+		if !strings.Contains(got.Name, "setup-") || got.URL != "u-setup" {
+			t.Fatalf("windows should pick setup exe, got %+v", got)
+		}
+	case "darwin":
+		suffix := "-amd64.dmg"
+		if runtime.GOARCH == "arm64" {
+			suffix = "-arm64.dmg"
+		}
+		if !strings.HasSuffix(got.Name, suffix) || got.URL == "u-portable" {
+			t.Fatalf("macOS should pick %s, got %+v", suffix, got)
+		}
+	}
+	if pickUpdateAsset(&githubRelease{}) != nil {
+		t.Fatal("empty release should have no asset")
+	}
+	if pickUpdateAsset(nil) != nil {
+		t.Fatal("nil release should have no asset")
 	}
 }
 
