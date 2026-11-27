@@ -102,6 +102,7 @@ type app struct {
 type appSettings struct {
 	DownloadDir  string `json:"downloadDir"`
 	MaxDownloads int    `json:"maxDownloads"`
+	BaseURL      string `json:"baseUrl"`
 }
 
 type downloadTask struct {
@@ -711,15 +712,15 @@ func (a *app) restoreContent(c *ui.Context) {
 
 func (a *app) loginContent(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Fill().Justify(ui.Center).AlignItems(ui.Center).Padding(20, 32, 32).Children(func() {
+	ui.Row(c).Fill().Justify(ui.Center).AlignItems(ui.Center).Padding(16, 24, 24).Children(func() {
 		card := panel(c)
-		card.Width(430).Padding(26).Gap(11).Children(func() {
+		card.Width(380).Padding(20).Gap(8).Children(func() {
 			// Brand block.
-			ui.Row(c).Gap(13).AlignItems(ui.Center).Children(func() {
-				brandMark(c, 42)
+			ui.Row(c).Gap(11).AlignItems(ui.Center).Children(func() {
+				brandMark(c, 34)
 				ui.Column(c).Gap(2).Children(func() {
-					ui.Text(c, "资源管家").FontSize(24).Bold()
-					ui.Text(c, "登录以管理你的文件").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "资源管家").FontSize(19).Bold()
+					ui.Text(c, "登录以管理你的文件").FontSize(11).TextColor(t.TextMuted)
 				})
 			})
 			divider(c)
@@ -756,7 +757,7 @@ func (a *app) loginContent(c *ui.Context) {
 			if primary(c, loginLabel, 0).FillWidth().Disabled(a.busy).Clicked() {
 				a.doLogin()
 			}
-			ui.Text(c, "由 Vercel · Supabase · MyGo 驱动").FontSize(11).
+			ui.Text(c, "资源管家 · MyGo 原生客户端").FontSize(10).
 				TextColor(t.TextMuted).Justify(ui.Center)
 		})
 	})
@@ -1364,6 +1365,8 @@ func (a *app) doLogin() {
 			a.screen = "files"
 			a.email = email
 			a.captchaID, a.captchaSVG, a.code = "", "", ""
+			a.settings.BaseURL = strings.TrimSpace(a.base)
+			_ = saveSettings(a.settingsPath, a.settings)
 			a.loadAllFolders()
 			if err := a.api.SaveSession(a.sessionFile); err != nil {
 				a.setError("会话保存失败: " + err.Error())
@@ -1997,16 +2000,30 @@ func main() {
 		downloads: map[string]*downloadTask{}, expanded: map[string]bool{},
 	}
 	a.setAPI()
+	// MyGo resolves the per-user data directory natively on macOS, where a
+	// GUI-launched app may not have HOME set (os.UserConfigDir then fails and
+	// silently writes into a relative path). Fall back for other platforms.
+	configDir, err := mygo.App.Path(mygo.PathUserData)
+	if err != nil || strings.TrimSpace(configDir) == "" {
+		base, _ := os.UserConfigDir()
+		configDir = filepath.Join(base, "resource-hub-desktop")
+	}
+	a.sessionFile = filepath.Join(configDir, "session.json")
+	a.settingsPath = filepath.Join(configDir, "settings.json")
+	a.settings = loadSettings(a.settingsPath)
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		fmt.Fprintln(os.Stderr, "create config dir:", err)
+	}
+	// A GUI-launched .app on macOS does not reliably find a .env next to the
+	// executable, so remember the server address chosen at login.
+	if base := strings.TrimSpace(a.settings.BaseURL); base != "" {
+		a.base = base
+		a.setAPI()
+	}
 	if env := strings.TrimSpace(os.Getenv("RESOURCE_HUB_API")); env != "" {
 		a.base = env
 		a.setAPI()
 	}
-	configDir, _ := os.UserConfigDir()
-	configDir = filepath.Join(configDir, "resource-hub-desktop")
-	a.sessionFile = filepath.Join(configDir, "session.json")
-	a.settingsPath = filepath.Join(configDir, "settings.json")
-	a.settings = loadSettings(a.settingsPath)
-	_ = os.MkdirAll(configDir, 0700)
 	if err := a.api.LoadSession(a.sessionFile); err == nil {
 		a.restoring = true
 	}

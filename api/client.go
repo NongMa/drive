@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -259,6 +260,9 @@ func (c *Client) SaveSession(path string) error {
 	}
 	data, err := json.MarshalIndent(items, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)

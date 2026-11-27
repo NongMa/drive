@@ -25,6 +25,19 @@ func TestLoadEnv(t *testing.T) {
 	}
 }
 
+func TestSettingsPersistBaseURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := saveSettings(path, appSettings{
+		DownloadDir: "/tmp/downloads", MaxDownloads: 2, BaseURL: "https://example.com/",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := loadSettings(path)
+	if got.BaseURL != "https://example.com/" || got.DownloadDir != "/tmp/downloads" || got.MaxDownloads != 2 {
+		t.Fatalf("settings round trip: %+v", got)
+	}
+}
+
 // The view runs without a window in tests, so the login screen can be
 // checked without opening a GUI.
 func TestLoginView(t *testing.T) {

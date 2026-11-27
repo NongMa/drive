@@ -10,6 +10,17 @@ import (
 	"time"
 )
 
+func TestSaveSessionCreatesParentDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "deeper", "session.json")
+	c := New("https://example.com")
+	if err := c.SaveSession(path); err != nil {
+		t.Fatalf("SaveSession with missing parent dir: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.json")
 	u, _ := url.Parse("https://example.com")

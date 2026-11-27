@@ -22,7 +22,7 @@ const latestReleaseURL = "https://api.github.com/repos/NongMa/drive/releases/lat
 
 // fallbackVersion matches the version in mygo.json; it is used when the
 // runtime has no embedded build version (for example in dev builds).
-const fallbackVersion = "0.2.2"
+const fallbackVersion = "0.2.3"
 
 func currentVersion() string {
 	if v := strings.TrimSpace(mygo.App.Version()); v != "" {
